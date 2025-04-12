@@ -2,6 +2,14 @@
 #include <string.h>
 #include <stdlib.h>
 
+void logMessage(const char *filename, const char *message) {
+    FILE *f = fopen(filename, "a");
+    if (f) {
+        fprintf(f, "%s\n", message);
+        fclose(f);
+    }
+}
+
 int main(int argc, char *argv[]) 
 {
     if (argc < 2) 
