@@ -1,10 +1,21 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+typedef struct 
+{
+    int treasureId;
+    char username[50];
+    float latitude;
+    float longitude;
+    char clue[100];
+    int value;
+} Treasure;
 
-void logMessage(const char *filename, const char *message) {
+void logMessage(const char *filename, const char *message) 
+{
     FILE *f = fopen(filename, "a");
-    if (f) {
+    if (f) 
+    {
         fprintf(f, "%s\n", message);
         fclose(f);
     }
@@ -19,7 +30,7 @@ int main(int argc, char *argv[])
     }
 
     if (strcmp(argv[1], "--add") == 0) 
-    {
+    {   
     }
     else if (strcmp(argv[1], "--add_treasure") == 0) 
     {
