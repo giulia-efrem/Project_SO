@@ -147,7 +147,7 @@ int addTreasure(const char *huntName)
     return 0;
 }
 
-int listHunt(const char *huntName) 
+int listHunt(const char *huntName)
 {
     char huntDir[256];
     snprintf(huntDir, sizeof(huntDir), "hunts/%s", huntName);
@@ -161,23 +161,48 @@ int listHunt(const char *huntName)
 
     char treasurePath[256];
     snprintf(treasurePath, sizeof(treasurePath), "%s/treasure.bin", huntDir);
+    FILE *f = fopen(treasurePath, "rb");
 
-    if (stat(treasurePath, &st) != 0) 
+    if (!f) 
     {
         printf("No treasure.bin found in hunt '%s'.\n", huntName);
         return -1;
     }
 
-    long sizeKB = (st.st_size + 1023) / 1024;
+    fseek(f, 0, SEEK_END);
+    long fileSize = ftell(f);
+    rewind(f);
 
+    long sizeKB = (fileSize + 1023) / 1024;
     struct tm *timeinfo = localtime(&st.st_mtime);
     char timeStr[64];
     strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", timeinfo);
 
     printf("%s treasure.bin %ldKB %s\n", huntName, sizeKB, timeStr);
 
+    int numRecords = fileSize / sizeof(Treasure);
+
+    Treasure t;
+    for (int i = 0; i < numRecords; i++) 
+    {
+        if (fread(&t, sizeof(Treasure), 1, f) != 1) 
+        {
+            break;  
+        }
+        printf("treasure %d: %s %.2f %.2f %d %s\n", t.treasureId, t.username, t.latitude, t.longitude, t.value, t.clue);
+    }
+    fclose(f);
+
+    char generalLogPath[256], huntLogPath[256], logEntry[256];
+    snprintf(generalLogPath, sizeof(generalLogPath), "logs/general.log");
+    snprintf(huntLogPath, sizeof(huntLogPath), "logs/%s.log", huntName);
+    snprintf(logEntry, sizeof(logEntry), "Listed treasures for hunt '%s'.", huntName);
+    logMessage(generalLogPath, logEntry);
+    logMessage(huntLogPath, logEntry);
+
     return 0;
 }
+
 
 int viewTreasure(const char *huntName, int treasureId)
 {
@@ -261,6 +286,7 @@ int main(int argc, char *argv[])
             return 1;
         }
     }
+    
     else if (strcmp(argv[1], "--add_treasure") == 0) 
     {
         if (argc < 3) 
@@ -275,6 +301,7 @@ int main(int argc, char *argv[])
             return 1;
         }
     }
+
     else if (strcmp(argv[1], "--list") == 0) 
     {
         if (argc < 3) 
@@ -282,19 +309,8 @@ int main(int argc, char *argv[])
             printf("Use: %s --list <huntName>\n", argv[0]);
             return 1;
         }
-        
-        if (strcmp(argv[1], "--list") == 0) 
-        {
-            return listHunt(argv[2]);
-        }
-
-        else 
-        {
-            printf("Not the right command.\n");
-            return 1;
-        }
+        return listHunt(argv[2]);
     }
-
 
     else if (strcmp(argv[1], "--view") == 0) 
     {
@@ -309,7 +325,7 @@ int main(int argc, char *argv[])
 
         return viewTreasure(huntName, treasureId);
     }
-    
+
     else 
     {
         printf("Not the right command\n");
