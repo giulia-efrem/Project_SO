@@ -179,6 +179,64 @@ int listHunt(const char *huntName)
     return 0;
 }
 
+int viewTreasure(const char *huntName, int treasureId)
+{
+    char huntDir[256];
+    snprintf(huntDir, sizeof(huntDir), "hunts/%s", huntName);
+
+    struct stat st;
+    if (stat(huntDir, &st) != 0 || !S_ISDIR(st.st_mode))
+    {
+        printf("Hunt '%s' doesn't exist.\n", huntName);
+        return -1;
+    }
+
+    char treasurePath[256];
+    snprintf(treasurePath, sizeof(treasurePath), "%s/treasure.bin", huntDir);
+
+    FILE *f = fopen(treasurePath, "rb");
+    if (!f)
+    {
+        perror("Error opening treasure.bin");
+        return -1;
+    }
+
+    Treasure t;
+    int found = 0;
+    while (fread(&t, sizeof(Treasure), 1, f) == 1)
+    {
+        if (t.treasureId == treasureId)
+        {
+            printf("Treasure ID: %d\n", t.treasureId);
+            printf("Username: %s\n", t.username);
+            printf("Latitude: %f\n", t.latitude);
+            printf("Longitude: %f\n", t.longitude);
+            printf("Clue: %s\n", t.clue);
+            printf("Value: %d\n", t.value);
+
+            found = 1;
+            break;
+        }
+    }
+    fclose(f);
+
+    if (!found)
+    {
+        printf("Treasure ID %d not found in hunt '%s'.\n", treasureId, huntName);
+        return -1;
+    }
+
+    char generalLogPath[256], huntLogPath[256], logEntry[256];
+    snprintf(generalLogPath, sizeof(generalLogPath), "logs/general.log");
+    snprintf(huntLogPath, sizeof(huntLogPath), "logs/%s.log", huntName);
+    snprintf(logEntry, sizeof(logEntry),"Treasure ID %d viewed from hunt '%s'.",treasureId, huntName);
+    logMessage(generalLogPath, logEntry);
+    logMessage(huntLogPath, logEntry);
+
+    return 0;
+}
+
+
 
 int main(int argc, char *argv[]) 
 {
@@ -240,7 +298,18 @@ int main(int argc, char *argv[])
 
     else if (strcmp(argv[1], "--view") == 0) 
     {
+        if (argc < 4)
+        {
+            printf("Use: %s --view <huntName> <treasureId>\n", argv[0]);
+            return 1;
+        }
+
+        const char *huntName = argv[2];
+        int treasureId = atoi(argv[3]);
+
+        return viewTreasure(huntName, treasureId);
     }
+    
     else 
     {
         printf("Not the right command\n");
