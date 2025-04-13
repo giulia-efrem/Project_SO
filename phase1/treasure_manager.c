@@ -143,7 +143,7 @@ int addTreasure(const char *huntName)
     logMessage(generalLogPath, logEntry);
     logMessage(huntLogPath, logEntry);
 
-    printf("Treasure added to hunt '%s'.\n", huntName);
+    printf("Treasure added to hunt '%s'\n", huntName);
     return 0;
 }
 
@@ -155,7 +155,7 @@ int listHunt(const char *huntName)
     struct stat st;
     if (stat(huntDir, &st) != 0 || !S_ISDIR(st.st_mode)) 
     {
-        printf("Hunt '%s' doesn't exist.\n", huntName);
+        printf("Hunt '%s' doesn't exist\n", huntName);
         return -1;
     }
 
@@ -196,7 +196,7 @@ int listHunt(const char *huntName)
     char generalLogPath[256], huntLogPath[256], logEntry[256];
     snprintf(generalLogPath, sizeof(generalLogPath), "logs/general.log");
     snprintf(huntLogPath, sizeof(huntLogPath), "logs/%s.log", huntName);
-    snprintf(logEntry, sizeof(logEntry), "Listed treasures for hunt '%s'.", huntName);
+    snprintf(logEntry, sizeof(logEntry), "Listed treasures for hunt '%s'", huntName);
     logMessage(generalLogPath, logEntry);
     logMessage(huntLogPath, logEntry);
 
@@ -212,7 +212,7 @@ int viewTreasure(const char *huntName, int treasureId)
     struct stat st;
     if (stat(huntDir, &st) != 0 || !S_ISDIR(st.st_mode))
     {
-        printf("Hunt '%s' doesn't exist.\n", huntName);
+        printf("Hunt '%s' doesn't exist\n", huntName);
         return -1;
     }
 
@@ -261,7 +261,138 @@ int viewTreasure(const char *huntName, int treasureId)
     return 0;
 }
 
+int removeTreasure(const char *huntName, int treasureId)
+{
+    char huntDir[256];
+    snprintf(huntDir, sizeof(huntDir), "hunts/%s", huntName);
 
+    struct stat st;
+    if (stat(huntDir, &st) != 0 || !S_ISDIR(st.st_mode)) 
+    {
+        printf("Hunt '%s' doesn't exist\n", huntName);
+        return -1;
+    }
+
+    char treasurePath[256];
+    snprintf(treasurePath, sizeof(treasurePath), "%s/treasure.bin", huntDir);
+
+    FILE *inFile = fopen(treasurePath, "rb");
+    if (!inFile) 
+    {
+        printf("Can't open the treasure file for reading\n");
+        return -1;
+    }
+
+    char tempPath[256];
+    snprintf(tempPath, sizeof(tempPath), "%s/treasure_temp.bin", huntDir);
+    FILE *outFile = fopen(tempPath, "wb");
+
+    if (!outFile) 
+    {
+        fclose(inFile);
+        perror("Error creating a temporary file");
+        return -1;
+    }
+
+    Treasure t;
+    int found = 0;
+
+    while (fread(&t, sizeof(Treasure), 1, inFile) == 1) 
+    {
+        if (t.treasureId == treasureId) 
+        {
+            found = 1;
+        }
+
+        else 
+        {
+            fwrite(&t, sizeof(Treasure), 1, outFile);
+        }
+    }
+
+    fclose(inFile);
+    fclose(outFile);
+
+    if (!found) 
+    {
+        printf("Treasure ID %d was not found in hunt '%s'\n", treasureId, huntName);
+        remove(tempPath);
+        return -1;
+    }
+
+    if (remove(treasurePath) != 0) 
+    {
+        perror("Error removing the original treasure file");
+        return -1;
+    }
+
+    if (rename(tempPath, treasurePath) != 0) 
+    {
+        perror("Error renaming the temporary file to the treasure file");
+        return -1;
+    }
+
+    char generalLogPath[256];
+    snprintf(generalLogPath, sizeof(generalLogPath), "logs/general.log");
+
+    char huntLogPath[256];
+    snprintf(huntLogPath, sizeof(huntLogPath), "logs/%s.log", huntName);
+
+    char logEntry[256];
+    snprintf(logEntry, sizeof(logEntry), "Treasure ID %d was removed from hunt '%s'", treasureId, huntName);
+
+    logMessage(generalLogPath, logEntry);
+    logMessage(huntLogPath, logEntry);
+
+    printf("Treasure ID %d was removed from hunt '%s'\n", treasureId, huntName);
+    return 0;
+}
+
+int removeHunt(const char *huntName)
+{
+    char huntDir[256];
+    snprintf(huntDir, sizeof(huntDir), "hunts/%s", huntName);
+
+    struct stat st;
+    if (stat(huntDir, &st) != 0 || !S_ISDIR(st.st_mode)) 
+    {
+        printf("Hunt '%s' doesn't exist\n", huntName);
+        return -1;
+    }
+
+    char treasurePath[256];
+    snprintf(treasurePath, sizeof(treasurePath), "%s/treasure.bin", huntDir);
+    if (remove(treasurePath) != 0 && errno != ENOENT) 
+    {
+        perror("Error removing the treasure.bin");
+        return -1;
+    }
+
+    if (rmdir(huntDir) != 0)
+    {
+        perror("Error removing the hunt directory");
+        return -1;
+    }
+
+    char huntLogPath[256];
+    snprintf(huntLogPath, sizeof(huntLogPath), "logs/%s.log", huntName);
+
+    if (remove(huntLogPath) != 0 && errno != ENOENT) 
+    {
+        perror("Error removing the hunt log file");
+    }
+
+    char generalLogPath[256];
+    snprintf(generalLogPath, sizeof(generalLogPath), "logs/general.log");
+
+    char logEntry[256];
+    snprintf(logEntry, sizeof(logEntry), "Hunt '%s' removed", huntName);
+
+    logMessage(generalLogPath, logEntry);
+
+    printf("Hunt '%s' was removed \n", huntName);
+    return 0;
+}
 
 int main(int argc, char *argv[]) 
 {
@@ -286,7 +417,7 @@ int main(int argc, char *argv[])
             return 1;
         }
     }
-    
+
     else if (strcmp(argv[1], "--add_treasure") == 0) 
     {
         if (argc < 3) 
@@ -324,6 +455,29 @@ int main(int argc, char *argv[])
         int treasureId = atoi(argv[3]);
 
         return viewTreasure(huntName, treasureId);
+    }
+
+    else if (strcmp(argv[1], "--removeTreasure") == 0)
+    {
+        if (argc < 4)
+        {
+            printf("Use: %s --remove <huntName> <treasureId>\n", argv[0]);
+            return 1;
+        }
+
+        const char *huntName = argv[2];
+        int treasureId = atoi(argv[3]);
+        return removeTreasure(huntName, treasureId);
+    }
+
+    else if (strcmp(argv[1], "--removeHunt") == 0)
+    {
+        if (argc < 3)
+        {
+            printf("Use: %s --remove_hunt <huntName>\n", argv[0]);
+            return 1;
+        }
+        return removeHunt(argv[2]);
     }
 
     else 
