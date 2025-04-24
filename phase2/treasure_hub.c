@@ -1,15 +1,48 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/types.h>  
+#include <unistd.h>     
 
-void start_monitor()   
-{ 
-    printf("not yet\n"); 
+void monitor_loop() 
+{
+    printf("[Monitor %d] ready for commands…\n", getpid());
+    
+    while (1) 
+    {
+        pause();
+    }
+}
+
+void start_monitor() 
+{
+    
+    if (monitor_pid) 
+    {
+        printf("[Monitor %d] already running\n", monitor_pid);
+        return;
+    }
+
+    pid_t pid = fork();
+
+    if (pid < 0) 
+    {
+        perror("fork");
+        return;
+    }
+
+    if (pid == 0) 
+    {
+        monitor_loop();
+        exit(0);
+    }
+    monitor_pid = pid;
+    printf("Started monitor %d\n", monitor_pid);
 }
 
 void list_hunts()      
 { 
-    printf("not yet\n"); 
+    
 }
 
 void list_treasures()  
