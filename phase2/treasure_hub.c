@@ -53,30 +53,30 @@ void monitor_loop()
         {
             const char *base = "../phase1/hunts";
             DIR *d = opendir(base);
+
             if (!d) 
             { 
                 perror("opendir"); exit(1); 
             }
 
             struct dirent *entry;
+
             while ((entry = readdir(d))) 
             {
                 if (!only_dirs(entry)) continue;
-
                 char binpath[512];
-                snprintf(binpath, sizeof(binpath),
-                         "%s/%s/treasure.bin", base, entry->d_name);
 
+                snprintf(binpath, sizeof(binpath),"%s/%s/treasure.bin",base, entry->d_name);
+               
                 FILE *tf = fopen(binpath, "rb");
-
                 int cnt = 0;
+                 
                 if (tf) 
                 {
-                    if (fseek(tf, 0, SEEK_END)==0) 
-                    {
-                        long sz = ftell(tf);
-                        cnt = sz / sizeof(Treasure);
-                    }
+                    fseek(tf, 0, SEEK_END);
+                    long sz = ftell(tf);
+
+                    cnt = sz / sizeof(Treasure);
                     fclose(tf);
                 }
                 printf("%s: %d treasures\n", entry->d_name, cnt);
@@ -84,15 +84,14 @@ void monitor_loop()
             closedir(d);
         }
 
-        // list_treasures:<hunt>
+        // list_treasures
         else if (strncmp(task, "list_treasures:",15) == 0)
         {
             char *hunt = task + 15;
             char binpath[512];
             snprintf(binpath, sizeof(binpath), "../phase1/hunts/%s/treasure.bin", hunt);
-
+            
             FILE *tf = fopen(binpath, "rb");
-
             if (!tf) 
             {
                 printf("Hunt '%s' has no treasure.bin\n", hunt);
@@ -100,17 +99,59 @@ void monitor_loop()
             }
 
             printf("Treasures in '%s':\n", hunt);
-
             Treasure t;
+
             while (fread(&t, sizeof(Treasure), 1, tf) == 1) 
             {
-                printf("  ID: %d user: %s (%.4f,%.4f) value: %d clue:\"%s\"\n", t.treasureId, t.username,t.latitude, t.longitude,t.value, t.clue);
+                printf("  ID:%d user:%s loc:(%.4f,%.4f) value:%d clue:\"%s\"\n", t.treasureId, t.username,t.latitude, t.longitude,t.value, t.clue);
             }
+            fclose(tf);
+        }
+
+        //view_treasure:<hunt>:<id>
+        else if (strncmp(task, "view_treasure:",14) == 0)
+        {
+            char *rest = task + 14;
+            char *hunt = strtok(rest, ":");
+            char *id_str = strtok(NULL, ":");
+
+            if (!hunt || !id_str) continue;
+
+            int tid = atoi(id_str);
+
+            char binpath[512];
+            snprintf(binpath, sizeof(binpath),"../phase1/hunts/%s/treasure.bin", hunt);
+            
+            FILE *tf = fopen(binpath, "rb");
+            if (!tf)
+            {
+                printf("Hunt '%s' has no treasure.bin\n", hunt);
+                continue;
+            }
+
+            Treasure t;
+            int found = 0;
+
+            while (fread(&t, sizeof(Treasure), 1, tf) == 1) 
+            {
+                if (t.treasureId == tid) 
+                {
+                    printf("Treasure %d details:\n", t.treasureId);
+                    printf("  User:      %s\n", t.username);
+                    printf("  Location:  %.4f, %.4f\n",t.latitude, t.longitude);
+                    printf("  Value:     %d\n", t.value);
+                    printf("  Clue:      %s\n", t.clue);
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found)
+                
+            printf("Treasure ID %d was not found in hunt '%s'\n", tid, hunt);
             fclose(tf);
         }
     }
 }
-
 void start_monitor() 
 {
     if (pipe(fds) == -1) 
@@ -162,7 +203,23 @@ void list_treasures()
 
 void view_treasure()   
 { 
-    printf("not yet\n"); 
+    char hunt[64], id[16];
+    printf("Hunt name: ");
+
+    if (!fgets(hunt, sizeof(hunt), stdin)) return;
+
+    hunt[strcspn(hunt, "\n")] = 0;
+
+    printf("Treasure ID: ");
+    if (!fgets(id, sizeof(id), stdin)) return;
+    
+    id[strcspn(id, "\n")] = 0;
+
+    char task[100];
+    snprintf(task, sizeof(task),"view_treasure:%s:%s", hunt, id);
+
+    write(fds[1], task, strlen(task));
+    usleep(200000);
 }
 
 void stop_monitor() 
@@ -177,7 +234,7 @@ void stop_monitor()
     waitpid(monitor_pid, NULL, 0);
     
     printf("Monitor %d stopped\n", monitor_pid);
-    
+
     monitor_pid = 0;
 }
 
