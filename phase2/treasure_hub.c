@@ -1,10 +1,11 @@
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
-#include <sys/types.h>  
-#include <unistd.h>     
+#include <string.h>
+#include <stdbool.h>
+#include <unistd.h>
 #include <dirent.h>
 #include <signal.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 
 typedef struct 
@@ -17,32 +18,48 @@ typedef struct
     int   value;
 } Treasure;
 
-pid_t monitor_pid = 0;
-int   fds[2]; 
+static pid_t monitor_pid = 0;
+static int   fds[2];
+static bool  stopping = false;
 
-int only_dirs(const struct dirent *e) 
+// new command
+static volatile sig_atomic_t got_cmd = 0;
+
+// start on SIGUSR1, stop on SIGUSR2
+static void on_cmd(int sig)  
+{ 
+    got_cmd = 1; 
+}
+static void on_stop(int sig) 
+{ 
+    usleep(500000); 
+    _exit(0); 
+}
+
+static int only_dirs(const struct dirent *e) 
 {
     return e->d_type == DT_DIR
         && strcmp(e->d_name, ".")
         && strcmp(e->d_name, "..");
 }
 
-void on_stop(int sig) 
+static void monitor_loop(void) 
 {
-    usleep(500000);  // simulate delay
-    _exit(0);
-}
+    struct sigaction sa1 = { .sa_handler = on_cmd };
+    sigaction(SIGUSR1, &sa1, NULL);
 
-void monitor_loop() 
-{
-    struct sigaction sa = {0};
-    sa.sa_handler = on_stop;
-    sigaction(SIGUSR1, &sa, NULL);
+    struct sigaction sa2 = { .sa_handler = on_stop };
+    sigaction(SIGUSR2, &sa2, NULL);
 
+    close(fds[1]);  // child reads
     printf("[Monitor %d] is ready for commands…\n", getpid());
-    
+
     while (1) 
     {
+        pause();
+        if (!got_cmd) continue;
+        got_cmd = 0;
+
         char task[128];
         ssize_t n = read(fds[0], task, sizeof(task)-1);
         if (n <= 0) continue;
@@ -56,21 +73,19 @@ void monitor_loop()
 
             if (!d) 
             { 
-                perror("opendir"); exit(1); 
+                perror("opendir");
+                continue; 
             }
 
-            struct dirent *entry;
-
-            while ((entry = readdir(d))) 
+            struct dirent *e;
+            while ((e = readdir(d))) 
             {
-                if (!only_dirs(entry)) continue;
+                if (!only_dirs(e)) continue;
                 char binpath[512];
-
-                snprintf(binpath, sizeof(binpath),"%s/%s/treasure.bin",base, entry->d_name);
-               
+                snprintf(binpath, sizeof(binpath),"%s/%s/treasure.bin", base, e->d_name);
+                
                 FILE *tf = fopen(binpath, "rb");
                 int cnt = 0;
-                 
                 if (tf) 
                 {
                     fseek(tf, 0, SEEK_END);
@@ -79,19 +94,19 @@ void monitor_loop()
                     cnt = sz / sizeof(Treasure);
                     fclose(tf);
                 }
-                printf("%s: %d treasures\n", entry->d_name, cnt);
+                printf("%s: %d treasures\n", e->d_name, cnt);
             }
             closedir(d);
         }
 
-        // list_treasures
-        else if (strncmp(task, "list_treasures:",15) == 0)
+        // list_treasures:<hunt>
+        else if (strncmp(task, "list_treasures:",15) == 0) 
         {
             char *hunt = task + 15;
             char binpath[512];
-            snprintf(binpath, sizeof(binpath), "../phase1/hunts/%s/treasure.bin", hunt);
-            
+            snprintf(binpath, sizeof(binpath),"../phase1/hunts/%s/treasure.bin", hunt);
             FILE *tf = fopen(binpath, "rb");
+
             if (!tf) 
             {
                 printf("Hunt '%s' has no treasure.bin\n", hunt);
@@ -103,13 +118,13 @@ void monitor_loop()
 
             while (fread(&t, sizeof(Treasure), 1, tf) == 1) 
             {
-                printf("  ID:%d user:%s loc:(%.4f,%.4f) value:%d clue:\"%s\"\n", t.treasureId, t.username,t.latitude, t.longitude,t.value, t.clue);
+                printf("  ID:%d user:%s loc:(%.4f,%.4f) value:%d clue:\"%s\"\n",t.treasureId, t.username,t.latitude, t.longitude,t.value, t.clue);
             }
             fclose(tf);
         }
 
-        //view_treasure:<hunt>:<id>
-        else if (strncmp(task, "view_treasure:",14) == 0)
+        // view_treasure:<hunt>:<id>
+        else if (strncmp(task, "view_treasure:",14) == 0) 
         {
             char *rest = task + 14;
             char *hunt = strtok(rest, ":");
@@ -118,12 +133,11 @@ void monitor_loop()
             if (!hunt || !id_str) continue;
 
             int tid = atoi(id_str);
-
             char binpath[512];
             snprintf(binpath, sizeof(binpath),"../phase1/hunts/%s/treasure.bin", hunt);
             
             FILE *tf = fopen(binpath, "rb");
-            if (!tf)
+            if (!tf) 
             {
                 printf("Hunt '%s' has no treasure.bin\n", hunt);
                 continue;
@@ -138,123 +152,166 @@ void monitor_loop()
                 {
                     printf("Treasure %d details:\n", t.treasureId);
                     printf("  User:      %s\n", t.username);
-                    printf("  Location:  %.4f, %.4f\n",t.latitude, t.longitude);
+                    printf("  Location:  %.4f, %.4f\n",
+                           t.latitude, t.longitude);
                     printf("  Value:     %d\n", t.value);
                     printf("  Clue:      %s\n", t.clue);
                     found = 1;
                     break;
                 }
             }
+
             if (!found)
-                
-            printf("Treasure ID %d was not found in hunt '%s'\n", tid, hunt);
+                printf("Treasure ID %d not found in hunt '%s'\n", tid, hunt);
             fclose(tf);
         }
     }
 }
-void start_monitor() 
-{
-    if (pipe(fds) == -1) 
-    { 
-        perror("pipe"); exit(1); 
-    }
 
+static void parent_sigchld(int sig) 
+{
+    int status;
+    pid_t p = waitpid(monitor_pid, &status, WNOHANG);
+
+    if (p == monitor_pid) 
+    {
+        printf("\n[Monitor %d] exited\n", monitor_pid);
+        monitor_pid = 0;
+        stopping = false;
+    }
+}
+
+void start_monitor(void) 
+{
     if (monitor_pid) 
     {
-        printf("[Monitor %d] is already running\n", monitor_pid);
+        printf("Monitor %d is already running\n", monitor_pid);
         return;
+    }
+    if (pipe(fds) == -1) 
+    { 
+        perror("pipe");
+        exit(1); 
     }
 
     pid_t pid = fork();
+
     if (pid < 0) 
     { 
-        perror("fork"); return; 
+        perror("fork");
+        return; 
     }
 
     if (pid == 0) 
     {
-        close(fds[1]);
         monitor_loop();
     }
 
+    // parent
     close(fds[0]);
     monitor_pid = pid;
+    stopping = false;
+
     printf("Started monitor %d\n", monitor_pid);
 }
 
-void list_hunts() 
+void list_hunts_cmd(void) 
 {
-    write(fds[1], "list_hunts", strlen("list_hunts"));
-    usleep(200000);
-}
-
-void list_treasures()  
-{ 
-    char hunt[64];
-    printf("Hunt name: ");
-    if (!fgets(hunt, sizeof(hunt), stdin)) return;
-    hunt[strcspn(hunt, "\n")] = 0;
-
-    char task[80];
-    snprintf(task, sizeof(task), "list_treasures:%s", hunt);
-    write(fds[1], task, strlen(task));
-    usleep(200000);
-}
-
-void view_treasure()   
-{ 
-    char hunt[64], id[16];
-    printf("Hunt name: ");
-
-    if (!fgets(hunt, sizeof(hunt), stdin)) return;
-
-    hunt[strcspn(hunt, "\n")] = 0;
-
-    printf("Treasure ID: ");
-    if (!fgets(id, sizeof(id), stdin)) return;
-    
-    id[strcspn(id, "\n")] = 0;
-
-    char task[100];
-    snprintf(task, sizeof(task),"view_treasure:%s:%s", hunt, id);
-
-    write(fds[1], task, strlen(task));
-    usleep(200000);
-}
-
-void stop_monitor() 
-{
-    if (!monitor_pid) 
+    if (!monitor_pid || stopping)
     {
-        printf("No monitor running\n");
+        puts("Error: monitor not available");
         return;
     }
 
+    write(fds[1], "list_hunts", 11);
     kill(monitor_pid, SIGUSR1);
-    waitpid(monitor_pid, NULL, 0);
-    
-    printf("Monitor %d stopped\n", monitor_pid);
-
-    monitor_pid = 0;
 }
 
-int main() 
+void list_treasures_cmd(void) 
 {
-    char cmd[64];
+    if (!monitor_pid || stopping) 
+    {
+        puts("the monitor not available");
+        return;
+    }
 
+    char hunt[64];
+    printf("Hunt name: ");
+    fgets(hunt, sizeof(hunt), stdin);
+
+    hunt[strcspn(hunt, "\n")] = 0;
+
+    char msg[80];
+    snprintf(msg, sizeof(msg), "list_treasures:%s", hunt);
+    
+    write(fds[1], msg, strlen(msg));
+    kill(monitor_pid, SIGUSR1);
+}
+
+void view_treasure_cmd(void)
+{
+    if (!monitor_pid || stopping) 
+    {
+        puts("the monitor not available");
+        return;
+    }
+
+    char hunt[64], id[16];
+
+    printf("Hunt name: ");
+    fgets(hunt, sizeof(hunt), stdin);
+    hunt[strcspn(hunt, "\n")] = 0;
+
+    printf("Treasure ID: ");
+    fgets(id, sizeof(id), stdin);
+    id[strcspn(id, "\n")] = 0;
+
+    char msg[100];
+    snprintf(msg, sizeof(msg), "view_treasure:%s:%s", hunt, id);
+    write(fds[1], msg, strlen(msg));
+    kill(monitor_pid, SIGUSR1);
+}
+
+void stop_monitor_cmd(void) 
+{
+    if (!monitor_pid || stopping)
+    {
+        puts("No monitor to stop");
+        return;
+    }
+
+    stopping = true;
+    kill(monitor_pid, SIGUSR2);
+    printf("Stopping monitor %d…\n", monitor_pid);
+}
+
+int main(void) 
+{
+    // catch SIGCHLD
+    struct sigaction sc = { .sa_handler = parent_sigchld };
+    sigaction(SIGCHLD, &sc, NULL);
+
+    char cmd[64];
     while (1) 
     {
         printf("--> ");
         if (!fgets(cmd, sizeof(cmd), stdin)) break;
         cmd[strcspn(cmd, "\n")] = 0;
 
-        if      (strcmp(cmd, "start_monitor") == 0) start_monitor();
-        else if (strcmp(cmd, "list_hunts")   == 0) list_hunts();
-        else if (strcmp(cmd, "list_treasures")== 0) list_treasures();
-        else if (strcmp(cmd, "view_treasure")== 0) view_treasure();
-        else if (strcmp(cmd, "stop_monitor")== 0) stop_monitor();
-        else if (strcmp(cmd, "exit")         == 0) break;
-        else    printf("unknown: '%s'\n", cmd);
+        if      (strcmp(cmd, "start_monitor")  == 0) start_monitor();
+        else if (strcmp(cmd, "list_hunts")     == 0) list_hunts_cmd();
+        else if (strcmp(cmd, "list_treasures") == 0) list_treasures_cmd();
+        else if (strcmp(cmd, "view_treasure")  == 0) view_treasure_cmd();
+        else if (strcmp(cmd, "stop_monitor")   == 0) stop_monitor_cmd();
+        else if (strcmp(cmd, "exit")           == 0) 
+        {
+            if (monitor_pid || stopping)
+                puts("Error: monitor still running");
+            else
+                break;
+        }
+        else
+            printf("unknown: '%s'\n", cmd);
     }
     return 0;
 }
