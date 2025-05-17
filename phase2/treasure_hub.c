@@ -7,6 +7,7 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/select.h>
 
 typedef struct 
 {
@@ -19,7 +20,8 @@ typedef struct
 } Treasure;
 
 static pid_t monitor_pid = 0;
-static int   fds[2];
+static int   fds[2];      // parent->child
+static int   result_fds[2];   // child->parent
 static bool  stopping = false;
 
 // new command
@@ -188,11 +190,19 @@ void start_monitor(void)
         printf("Monitor %d is already running\n", monitor_pid);
         return;
     }
-    if (pipe(fds) == -1) 
+
+    if (pipe(fds)    == -1) 
     { 
-        perror("pipe");
+        perror("cmd pipe");
         exit(1); 
     }
+
+    if (pipe(result_fds) == -1) 
+    {
+        perror("result pipe");
+        exit(1); 
+    }
+
 
     pid_t pid = fork();
 
@@ -204,15 +214,56 @@ void start_monitor(void)
 
     if (pid == 0) 
     {
-        monitor_loop();
+         
+       close(fds[1]);       // only read commands
+       close(result_fds[0]);    // only write results
+
+       // redirecting stdout into the write end of result_fds
+       if (dup2(result_fds[1], STDOUT_FILENO) == -1) 
+       {
+           perror("Err");
+           exit(1);
+       }
+       close(result_fds[1]);
+
+       monitor_loop();  // printf() in the monitor goes into the pipe
     }
 
     // parent
     close(fds[0]);
+    close(result_fds[1]);
     monitor_pid = pid;
     stopping = false;
 
     printf("Started monitor %d\n", monitor_pid);
+}
+
+static void read_monitor_output() 
+{
+    char buf[512];
+    fd_set rd;
+    struct timeval tv;
+
+    tv.tv_sec  = 0;
+    tv.tv_usec = 200000;
+
+    FD_ZERO(&rd);
+    FD_SET(result_fds[0], &rd);
+
+    // as long as select says there’s data, read & print
+    while (select(result_fds[0]+1, &rd, NULL, NULL, &tv) > 0) 
+    {
+        ssize_t n = read(result_fds[0], buf, sizeof(buf)-1);
+        if (n <= 0) break;
+        buf[n] = '\0';
+        fputs(buf, stdout);
+
+        // reset timeout 
+        tv.tv_sec  = 0;
+        tv.tv_usec = 200000;
+        FD_ZERO(&rd);
+        FD_SET(result_fds[0], &rd);
+    }
 }
 
 void list_hunts_cmd(void) 
@@ -225,6 +276,9 @@ void list_hunts_cmd(void)
 
     write(fds[1], "list_hunts", 11);
     kill(monitor_pid, SIGUSR1);
+
+    read_monitor_output();
+
 }
 
 void list_treasures_cmd(void) 
@@ -246,6 +300,9 @@ void list_treasures_cmd(void)
     
     write(fds[1], msg, strlen(msg));
     kill(monitor_pid, SIGUSR1);
+
+    read_monitor_output();
+
 }
 
 void view_treasure_cmd(void)
@@ -270,6 +327,8 @@ void view_treasure_cmd(void)
     snprintf(msg, sizeof(msg), "view_treasure:%s:%s", hunt, id);
     write(fds[1], msg, strlen(msg));
     kill(monitor_pid, SIGUSR1);
+    read_monitor_output();
+
 }
 
 void stop_monitor_cmd(void) 
