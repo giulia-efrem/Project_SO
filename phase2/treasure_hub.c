@@ -344,6 +344,44 @@ void stop_monitor_cmd(void)
     printf("Stopping monitor %d…\n", monitor_pid);
 }
 
+void calculate_score_cmd(void) {
+    if (!monitor_pid || stopping) {
+        puts("Error: monitor not available");
+        return;
+    }
+
+    DIR *d = opendir("../phase1/hunts");
+    if (!d) {
+        perror("opendir hunts");
+        return;
+    }
+
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!only_dirs(e)) continue;
+        char *hunt = e->d_name;
+
+        printf("Scores for hunt '%s':\n", hunt);
+
+        // invoke external score‐calculator via popen()
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "./calculate_score %s", hunt);
+
+        FILE *fp = popen(cmd, "r");
+        if (!fp) {
+            perror("popen calculate_score");
+            continue;
+        }
+
+        char line[128];
+        while (fgets(line, sizeof(line), fp)) {
+            fputs(line, stdout);
+        }
+        pclose(fp);
+    }
+    closedir(d);
+}
+
 int main(void) 
 {
     // catch SIGCHLD
@@ -361,6 +399,7 @@ int main(void)
         else if (strcmp(cmd, "list_hunts")     == 0) list_hunts_cmd();
         else if (strcmp(cmd, "list_treasures") == 0) list_treasures_cmd();
         else if (strcmp(cmd, "view_treasure")  == 0) view_treasure_cmd();
+        else if (strcmp(cmd, "calculate_score") == 0) calculate_score_cmd();
         else if (strcmp(cmd, "stop_monitor")   == 0) stop_monitor_cmd();
         else if (strcmp(cmd, "exit")           == 0) 
         {
